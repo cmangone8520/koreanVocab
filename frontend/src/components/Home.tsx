@@ -123,12 +123,22 @@ export default function Home({
                     className="flex-1 text-left"
                     onClick={() => handleOpen(t.id)}
                   >
-                    <div className="text-sm font-medium text-slate-800">
-                      <span className="capitalize">{t.level}</span>{" "}
-                      <span className="text-slate-400">·</span>{" "}
-                      <span className="capitalize">{t.mode}</span>{" "}
-                      <span className="text-slate-400">·</span>{" "}
-                      {t.num_questions} questions
+                    <div className="flex flex-wrap items-center gap-x-2 text-sm font-medium text-slate-800">
+                      <span className="capitalize">{t.level}</span>
+                      <span className="text-slate-400">·</span>
+                      <span className="capitalize">{t.mode}</span>
+                      <span className="text-slate-400">·</span>
+                      <span>{t.num_questions} questions</span>
+                      {t.vocab_source === "openai" && (
+                        <span className="rounded-full bg-indigo-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-indigo-700">
+                          openai
+                        </span>
+                      )}
+                      {t.vocab_source === "static_fallback" && (
+                        <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-700">
+                          fallback
+                        </span>
+                      )}
                     </div>
                     <div className="mt-0.5 text-xs text-slate-500">
                       {new Date(t.created_at + "Z").toLocaleString()} —{" "}

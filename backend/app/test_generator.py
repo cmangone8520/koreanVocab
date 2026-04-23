@@ -174,27 +174,25 @@ def _build_question(
     raise ValueError(f"Unknown question type: {q_type}")
 
 
-def generate_questions(
-    conn: sqlite3.Connection,
-    level: str,
+def build_questions_from_rows(
+    target_rows: list[sqlite3.Row],
+    distractor_pool: list[sqlite3.Row],
     mode: str,
     num_questions: int,
 ) -> list[GeneratedQuestion]:
-    """Generate ``num_questions`` questions for ``level`` / ``mode``."""
-    rows: list[sqlite3.Row] = list(
-        conn.execute(
-            "SELECT id, korean, romanization, english, level, category "
-            "FROM vocab WHERE level = ?",
-            (level,),
-        )
-    )
-    if not rows:
-        raise ValueError(f"No vocabulary found for level '{level}'")
+    """Build ``num_questions`` questions drawing targets from ``target_rows``.
+
+    Distractors for multiple-choice questions are picked from
+    ``distractor_pool``, which should include ``target_rows`` plus any
+    additional same-level vocab so wrong options look plausible.
+    """
+    if not target_rows:
+        raise ValueError("No vocabulary rows available to build a test")
 
     # Sample without replacement; if the user asks for more questions than
-    # words in the level, allow repeats but shuffle between rounds.
+    # there are words, allow repeats but shuffle between rounds.
     words: list[sqlite3.Row] = []
-    pool = rows[:]
+    pool = target_rows[:]
     while len(words) < num_questions:
         random.shuffle(pool)
         take = min(num_questions - len(words), len(pool))
@@ -204,8 +202,27 @@ def generate_questions(
     questions: list[GeneratedQuestion] = []
     for row in words:
         q_type = random.choice(types)
-        questions.append(_build_question(q_type, row, rows))
+        questions.append(_build_question(q_type, row, distractor_pool))
     return questions
+
+
+def generate_questions(
+    conn: sqlite3.Connection,
+    level: str,
+    mode: str,
+    num_questions: int,
+) -> list[GeneratedQuestion]:
+    """Generate ``num_questions`` questions from the static level pool."""
+    rows: list[sqlite3.Row] = list(
+        conn.execute(
+            "SELECT id, korean, romanization, english, level, category "
+            "FROM vocab WHERE level = ?",
+            (level,),
+        )
+    )
+    if not rows:
+        raise ValueError(f"No vocabulary found for level '{level}'")
+    return build_questions_from_rows(rows, rows, mode, num_questions)
 
 
 def normalize_answer(s: str) -> str:
