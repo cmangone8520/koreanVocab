@@ -70,7 +70,8 @@ CREATE TABLE IF NOT EXISTS tests (
     mode          TEXT NOT NULL,  -- 'written' | 'listening' | 'mixed'
     num_questions INTEGER NOT NULL,
     score         INTEGER,        -- number correct, filled in on submit
-    total         INTEGER         -- total questions (denormalized for listing)
+    total         INTEGER,        -- total questions (denormalized for listing)
+    vocab_source  TEXT NOT NULL DEFAULT 'static'  -- 'openai' | 'static' | 'static_fallback'
 );
 
 CREATE TABLE IF NOT EXISTS questions (
@@ -94,7 +95,17 @@ def init_db() -> None:
     """Create tables if they don't exist and seed/refresh the vocab list."""
     with get_db() as conn:
         conn.executescript(SCHEMA)
+        _migrate_schema(conn)
         _seed_vocab(conn)
+
+
+def _migrate_schema(conn: sqlite3.Connection) -> None:
+    """Apply additive schema migrations for existing databases."""
+    existing = {row["name"] for row in conn.execute("PRAGMA table_info(tests)")}
+    if "vocab_source" not in existing:
+        conn.execute(
+            "ALTER TABLE tests ADD COLUMN vocab_source TEXT NOT NULL DEFAULT 'static'"
+        )
 
 
 def _seed_vocab(conn: sqlite3.Connection) -> None:

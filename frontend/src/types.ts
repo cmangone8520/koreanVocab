@@ -1,5 +1,6 @@
 export type Level = "beginner" | "intermediate" | "advanced";
 export type Mode = "written" | "listening" | "mixed";
+export type VocabSource = "openai" | "static" | "static_fallback";
 export type QuestionType =
   | "kr_to_en_multiple_choice"
   | "en_to_kr_multiple_choice"
@@ -36,6 +37,8 @@ export interface Test {
   score: number | null;
   total: number | null;
   questions: Question[];
+  vocab_source: VocabSource;
+  vocab_source_error: string | null;
 }
 
 export interface TestSummary {
@@ -47,6 +50,7 @@ export interface TestSummary {
   num_questions: number;
   score: number | null;
   total: number | null;
+  vocab_source: VocabSource;
 }
 
 export interface Health {
