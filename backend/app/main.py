@@ -176,7 +176,14 @@ async def create_test(payload: TestCreate) -> TestResponse:
 def _upsert_generated_vocab(
     conn: Any, items: list[GeneratedVocabItem], level: str
 ) -> None:
-    """Insert OpenAI-generated vocab, updating existing rows on Korean-key conflict."""
+    """Insert OpenAI-generated vocab, leaving existing rows untouched.
+
+    We never modify a row that already exists (seeded or previously
+    generated). Mutating a seed row could move it to a different level
+    or change its accepted English meanings, which would corrupt both
+    level-scoped queries and the grading of any in-progress test that
+    references that row.
+    """
     rows = [
         (item["korean"], item["romanization"], item["english"], level, item["category"])
         for item in items
@@ -185,11 +192,7 @@ def _upsert_generated_vocab(
         """
         INSERT INTO vocab (korean, romanization, english, level, category)
         VALUES (?, ?, ?, ?, ?)
-        ON CONFLICT(korean) DO UPDATE SET
-            romanization = excluded.romanization,
-            english      = excluded.english,
-            level        = excluded.level,
-            category     = excluded.category
+        ON CONFLICT(korean) DO NOTHING
         """,
         rows,
     )
