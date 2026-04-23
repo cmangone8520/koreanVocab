@@ -38,7 +38,12 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 export const api = {
   healthz: () => request<Health>("/healthz"),
   listLevels: () => request<LevelSummary[]>("/vocab/levels"),
-  createTest: (args: { level: Level; mode: Mode; num_questions: number }) =>
+  createTest: (args: {
+    level: Level;
+    mode: Mode;
+    num_questions: number;
+    use_openai_vocab?: boolean;
+  }) =>
     request<Test>("/tests", {
       method: "POST",
       body: JSON.stringify(args),

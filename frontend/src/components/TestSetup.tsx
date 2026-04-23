@@ -33,11 +33,13 @@ export default function TestSetup({
   const [level, setLevel] = useState<Level>("beginner");
   const [mode, setMode] = useState<Mode>("written");
   const [numQuestions, setNumQuestions] = useState<number>(10);
+  const [useOpenAIVocab, setUseOpenAIVocab] = useState<boolean>(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const { showToast } = useToast();
 
   const listeningDisabled = !openaiConfigured;
+  const openaiVocabAvailable = openaiConfigured;
 
   async function handleCreate() {
     setSubmitting(true);
@@ -47,7 +49,26 @@ export default function TestSetup({
         level,
         mode,
         num_questions: numQuestions,
+        use_openai_vocab: useOpenAIVocab,
       });
+      if (t.vocab_source === "static_fallback") {
+        showToast({
+          kind: "warning",
+          title: "Using seed vocabulary",
+          message:
+            "OpenAI couldn't generate fresh words this time — " +
+            (t.vocab_source_error ?? "unknown error") +
+            ". Test continues with the built-in word list.",
+          durationMs: 7000,
+        });
+      } else if (t.vocab_source === "openai") {
+        showToast({
+          kind: "info",
+          title: "Fresh vocab generated",
+          message: "OpenAI picked new words for this test.",
+          durationMs: 3000,
+        });
+      }
       onCreated(t);
     } catch (e) {
       const msg = (e as Error).message;
@@ -136,6 +157,31 @@ export default function TestSetup({
               : "Mixed mode will request audio; listening questions will fail until OPENAI_API_KEY is set."}
           </p>
         )}
+      </fieldset>
+
+      <fieldset>
+        <legend className="text-sm font-medium text-slate-800">
+          Vocabulary source
+        </legend>
+        <div className="mt-2 rounded-lg border border-slate-200 bg-slate-50 p-3">
+          <label className="flex items-start gap-3 text-sm">
+            <input
+              type="checkbox"
+              checked={useOpenAIVocab && openaiVocabAvailable}
+              disabled={!openaiVocabAvailable}
+              onChange={(e) => setUseOpenAIVocab(e.target.checked)}
+              className="mt-0.5 h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 disabled:cursor-not-allowed disabled:opacity-50"
+            />
+            <span className={openaiVocabAvailable ? "text-slate-800" : "text-slate-500"}>
+              <span className="font-medium">Generate fresh words with OpenAI</span>
+              <span className="mt-0.5 block text-xs text-slate-500">
+                {openaiVocabAvailable
+                  ? "New Korean words are generated for each test. Falls back to the seed list if OpenAI is unreachable."
+                  : "Requires OPENAI_API_KEY in backend/.env. Tests will use the built-in seed word list."}
+              </span>
+            </span>
+          </label>
+        </div>
       </fieldset>
 
       <fieldset>

@@ -38,9 +38,14 @@ from app.models import (
     TestSummary,
 )
 from app.openai_client import generate_tts_audio, is_configured as openai_is_configured
+from app.openai_vocab_generator import (
+    OpenAIVocabError,
+    VocabItem as GeneratedVocabItem,
+    generate_vocab_items,
+)
 from app.test_generator import (
     GeneratedQuestion,
-    generate_questions,
+    build_questions_from_rows,
     grade_answer,
     normalize_answer,
 )
@@ -104,19 +109,46 @@ async def create_test(payload: TestCreate) -> TestResponse:
         )
 
     with get_db() as conn:
+        vocab_source = "static"
+        vocab_source_error: str | None = None
+        openai_target_koreans: list[str] = []
+
+        if payload.use_openai_vocab and openai_is_configured():
+            try:
+                items = await asyncio.to_thread(
+                    generate_vocab_items, payload.level, payload.num_questions
+                )
+                _upsert_generated_vocab(conn, items, payload.level)
+                openai_target_koreans = [item["korean"] for item in items]
+                vocab_source = "openai"
+            except OpenAIVocabError as exc:
+                logger.warning(
+                    "OpenAI vocab generation failed, falling back to static: %s", exc
+                )
+                vocab_source = "static_fallback"
+                vocab_source_error = str(exc)
+
         try:
-            questions = generate_questions(
+            questions = _build_questions_for_level(
                 conn,
                 level=payload.level,
                 mode=payload.mode,
                 num_questions=payload.num_questions,
+                target_koreans=openai_target_koreans or None,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         cursor = conn.execute(
-            "INSERT INTO tests (level, mode, num_questions, total) VALUES (?, ?, ?, ?)",
-            (payload.level, payload.mode, payload.num_questions, payload.num_questions),
+            "INSERT INTO tests (level, mode, num_questions, total, vocab_source) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (
+                payload.level,
+                payload.mode,
+                payload.num_questions,
+                payload.num_questions,
+                vocab_source,
+            ),
         )
         test_id = cursor.lastrowid
 
@@ -139,7 +171,71 @@ async def create_test(payload: TestCreate) -> TestResponse:
                 ),
             )
 
-        return _load_test(conn, test_id, reveal_answers=False)
+        response = _load_test(conn, test_id, reveal_answers=False)
+        response.vocab_source_error = vocab_source_error
+        return response
+
+
+def _upsert_generated_vocab(
+    conn: Any, items: list[GeneratedVocabItem], level: str
+) -> None:
+    """Insert OpenAI-generated vocab, leaving existing rows untouched.
+
+    We never modify a row that already exists (seeded or previously
+    generated). Mutating a seed row could move it to a different level
+    or change its accepted English meanings, which would corrupt both
+    level-scoped queries and the grading of any in-progress test that
+    references that row.
+    """
+    rows = [
+        (item["korean"], item["romanization"], item["english"], level, item["category"])
+        for item in items
+    ]
+    conn.executemany(
+        """
+        INSERT INTO vocab (korean, romanization, english, level, category)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(korean) DO NOTHING
+        """,
+        rows,
+    )
+
+
+def _build_questions_for_level(
+    conn: Any,
+    level: str,
+    mode: str,
+    num_questions: int,
+    target_koreans: list[str] | None = None,
+) -> list[GeneratedQuestion]:
+    """Build questions at ``level``.
+
+    ``target_koreans`` optionally constrains which rows become question
+    targets (the rest of the level pool still supplies MC distractors).
+    Callers use this to make every question reflect the OpenAI-generated
+    vocab rather than drawing from the combined seed+generated pool.
+    """
+    pool = list(
+        conn.execute(
+            "SELECT id, korean, romanization, english, level, category "
+            "FROM vocab WHERE level = ?",
+            (level,),
+        )
+    )
+    if not pool:
+        raise ValueError(f"No vocabulary found for level '{level}'")
+
+    if target_koreans:
+        targets = [row for row in pool if row["korean"] in set(target_koreans)]
+        if not targets:
+            # Every OpenAI word collided with a different-level row and
+            # was skipped by the upsert. Fall back to the full level pool
+            # so the user still gets a test instead of a 400.
+            targets = pool
+    else:
+        targets = pool
+
+    return build_questions_from_rows(targets, pool, mode, num_questions)
 
 
 @app.get("/tests", response_model=list[TestSummary])
@@ -147,7 +243,7 @@ async def list_tests() -> list[TestSummary]:
     with get_db() as conn:
         rows = conn.execute(
             "SELECT id, created_at, completed_at, level, mode, num_questions, "
-            "score, total FROM tests ORDER BY id DESC"
+            "score, total, vocab_source FROM tests ORDER BY id DESC"
         ).fetchall()
         return [
             TestSummary(
@@ -159,6 +255,7 @@ async def list_tests() -> list[TestSummary]:
                 num_questions=row["num_questions"],
                 score=row["score"],
                 total=row["total"],
+                vocab_source=row["vocab_source"] or "static",
             )
             for row in rows
         ]
@@ -261,8 +358,8 @@ async def tts(
 
 def _load_test(conn: Any, test_id: int, *, reveal_answers: bool) -> TestResponse:
     test_row = conn.execute(
-        "SELECT id, created_at, completed_at, level, mode, num_questions, score, total "
-        "FROM tests WHERE id = ?",
+        "SELECT id, created_at, completed_at, level, mode, num_questions, "
+        "score, total, vocab_source FROM tests WHERE id = ?",
         (test_id,),
     ).fetchone()
     if test_row is None:
@@ -312,6 +409,7 @@ def _load_test(conn: Any, test_id: int, *, reveal_answers: bool) -> TestResponse
         num_questions=test_row["num_questions"],
         score=test_row["score"],
         total=test_row["total"],
+        vocab_source=test_row["vocab_source"] or "static",
         questions=questions,
     )
 
