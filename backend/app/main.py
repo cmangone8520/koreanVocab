@@ -111,6 +111,7 @@ async def create_test(payload: TestCreate) -> TestResponse:
     with get_db() as conn:
         vocab_source = "static"
         vocab_source_error: str | None = None
+        openai_target_koreans: list[str] = []
 
         if payload.use_openai_vocab and openai_is_configured():
             try:
@@ -118,6 +119,7 @@ async def create_test(payload: TestCreate) -> TestResponse:
                     generate_vocab_items, payload.level, payload.num_questions
                 )
                 _upsert_generated_vocab(conn, items, payload.level)
+                openai_target_koreans = [item["korean"] for item in items]
                 vocab_source = "openai"
             except OpenAIVocabError as exc:
                 logger.warning(
@@ -132,6 +134,7 @@ async def create_test(payload: TestCreate) -> TestResponse:
                 level=payload.level,
                 mode=payload.mode,
                 num_questions=payload.num_questions,
+                target_koreans=openai_target_koreans or None,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -199,19 +202,40 @@ def _upsert_generated_vocab(
 
 
 def _build_questions_for_level(
-    conn: Any, level: str, mode: str, num_questions: int
+    conn: Any,
+    level: str,
+    mode: str,
+    num_questions: int,
+    target_koreans: list[str] | None = None,
 ) -> list[GeneratedQuestion]:
-    """Build questions using every same-level row in the vocab table."""
-    rows = list(
+    """Build questions at ``level``.
+
+    ``target_koreans`` optionally constrains which rows become question
+    targets (the rest of the level pool still supplies MC distractors).
+    Callers use this to make every question reflect the OpenAI-generated
+    vocab rather than drawing from the combined seed+generated pool.
+    """
+    pool = list(
         conn.execute(
             "SELECT id, korean, romanization, english, level, category "
             "FROM vocab WHERE level = ?",
             (level,),
         )
     )
-    if not rows:
+    if not pool:
         raise ValueError(f"No vocabulary found for level '{level}'")
-    return build_questions_from_rows(rows, rows, mode, num_questions)
+
+    if target_koreans:
+        targets = [row for row in pool if row["korean"] in set(target_koreans)]
+        if not targets:
+            # Every OpenAI word collided with a different-level row and
+            # was skipped by the upsert. Fall back to the full level pool
+            # so the user still gets a test instead of a 400.
+            targets = pool
+    else:
+        targets = pool
+
+    return build_questions_from_rows(targets, pool, mode, num_questions)
 
 
 @app.get("/tests", response_model=list[TestSummary])
